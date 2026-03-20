@@ -46,23 +46,27 @@ def preprocess_banner_text(image_bytes: bytes) -> Image.Image:
 
     Targets the bottom line of name tags which has smaller, dimmer text
     in the format 'Username | Role | Rank'.
+    Uses a strict blue filter (blue >> green) to avoid picking up
+    blue-ish sky or background pixels.
     """
-    gray, r_ch, _, b_ch = _load_image(image_bytes)
+    gray, r_ch, g_ch, b_ch = _load_image(image_bytes)
 
-    # Identify blue-ish banner regions
+    # Strict blue banner detection: blue must be significantly higher
+    # than green to isolate actual UI banners from sky/background
     blue_banner = (
-        (b_ch.astype(np.int16) > r_ch.astype(np.int16) + 15)
-        & (b_ch > 30)
-        & (gray < 180)
+        (b_ch.astype(np.int16) > g_ch.astype(np.int16) + 60)
+        & (b_ch > 60)
+        & (gray >= 40)
+        & (gray <= 160)
     )
 
-    # Within blue banner regions, isolate brighter text pixels
-    text_mask = blue_banner & (gray > 60)
+    # Within blue banner regions, isolate text pixels
+    text_mask = blue_banner & (gray > 40)
     text_arr = np.where(text_mask, 255, 0).astype(np.uint8)
 
     pil_img = Image.fromarray(text_arr)
     w, h = pil_img.size
-    pil_img = pil_img.resize((w * 10, h * 10), Image.LANCZOS)
+    pil_img = pil_img.resize((w * 8, h * 8), Image.LANCZOS)
 
     # Dilate to thicken thin text strokes
     pil_img = pil_img.filter(ImageFilter.MaxFilter(3))
@@ -92,10 +96,16 @@ def run_ocr_banner_lines(image_bytes: bytes) -> list[str]:
 def _looks_like_cadet(text: str) -> bool:
     """Fuzzy check whether *text* contains the word 'Cadet'.
 
-    OCR may misread it as Cadel, Cader, Cades, etc.
+    OCR may misread it as Cadel, Cader, Cades, Cacket, Cachet,
+    Codet, Cackt, etc.
     """
     lowered = text.lower()
-    return bool(re.search(r"\bcade[tlrs]?\b", lowered))
+    # Match common OCR misreadings of 'Cadet'
+    return bool(
+        re.search(r"\bcade[tlrs]?\b", lowered)
+        or re.search(r"\bcac[hk]e?t\b", lowered)
+        or re.search(r"\bco?det\b", lowered)
+    )
 
 
 def _parse_banner_line(line: str) -> dict[str, str] | None:
